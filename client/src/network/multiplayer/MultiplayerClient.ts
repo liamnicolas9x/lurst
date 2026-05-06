@@ -1,5 +1,5 @@
 import type { ChatMessage, ClientInput } from "@shared/types/net";
-import type { PlayerPresenceState, VillagerState } from "@shared/types/world";
+import type { BuildingState, PlayerPresenceState, VillagerState } from "@shared/types/world";
 import type { EntityId } from "@shared/types/ids";
 
 export type MultiplayerStatus =
@@ -12,7 +12,7 @@ export type MultiplayerClient = {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
 
-  setLocalPresence(p: { x: number; y: number } | null, units?: VillagerState[], selectedUnitIds?: EntityId[]): void;
+  setLocalPresence(p: { x: number; y: number } | null, units?: VillagerState[], selectedUnitIds?: EntityId[], buildings?: BuildingState[]): void;
   sendInput(input: ClientInput): void;
   sendChat(text: string): void;
 

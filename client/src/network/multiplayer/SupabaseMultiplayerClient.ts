@@ -1,7 +1,7 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { MultiplayerClient, MultiplayerStatus } from "@/network/multiplayer/MultiplayerClient";
 import type { ChatMessage, ClientInput } from "@shared/types/net";
-import type { PlayerPresenceState, UserMode, VillagerState } from "@shared/types/world";
+import type { BuildingState, PlayerPresenceState, UserMode, VillagerState } from "@shared/types/world";
 import type { EntityId, PlayerId } from "@shared/types/ids";
 import { REALTIME_CHAT_EVENT, REALTIME_WORLD_CHANNEL } from "@shared/constants/net";
 import { PRESENCE_TRACK_INTERVAL_MS } from "@shared/constants/game";
@@ -19,6 +19,7 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
   private latestPos: { x: number; y: number } | null = null;
   private latestUnits: VillagerState[] = [];
   private latestSelectedUnitIds: EntityId[] = [];
+  private latestBuildings: BuildingState[] = [];
 
   constructor(
     private local: {
@@ -67,6 +68,7 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
             mode?: UserMode;
             pos?: { x: number; y: number };
             units?: VillagerState[];
+            buildings?: BuildingState[];
             selectedUnitIds?: EntityId[];
             updatedAt?: number;
           };
@@ -78,6 +80,7 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
             mode: meta.mode ?? "spectator",
             pos: meta.pos,
             units: meta.units ?? [],
+            buildings: meta.buildings ?? [],
             selectedUnitIds: meta.selectedUnitIds ?? [],
             updatedAt: meta.updatedAt ?? Date.now(),
           });
@@ -112,6 +115,7 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
       pos: this.latestPos ?? undefined,
       units: this.latestUnits,
       selectedUnitIds: this.latestSelectedUnitIds,
+      buildings: this.latestBuildings,
       updatedAt: Date.now(),
     });
 
@@ -125,6 +129,7 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
         pos: this.latestPos ?? undefined,
         units: this.latestUnits,
         selectedUnitIds: this.latestSelectedUnitIds,
+        buildings: this.latestBuildings,
         updatedAt: Date.now(),
       });
     }, PRESENCE_TRACK_INTERVAL_MS);
@@ -145,10 +150,11 @@ export class SupabaseMultiplayerClient implements MultiplayerClient {
     if (channel) await channel.unsubscribe();
   }
 
-  setLocalPresence(p: { x: number; y: number } | null, units: VillagerState[] = [], selectedUnitIds: EntityId[] = []) {
+  setLocalPresence(p: { x: number; y: number } | null, units: VillagerState[] = [], selectedUnitIds: EntityId[] = [], buildings: BuildingState[] = []) {
     this.latestPos = p;
     this.latestUnits = units;
     this.latestSelectedUnitIds = selectedUnitIds;
+    this.latestBuildings = buildings;
   }
 
   sendInput(input: ClientInput) {

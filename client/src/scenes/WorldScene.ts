@@ -1,21 +1,30 @@
 import Phaser from "phaser";
+import { Building } from "@/entities/Building";
 import { createTestMap, renderTestMap } from "@/scenes/TestMap";
 import { Villager } from "@/entities/Villager";
 import { RtsCameraController } from "@/systems/RtsCameraController";
 import type { MultiplayerClient } from "@/network/multiplayer/MultiplayerClient";
 import type { PlayerId, EntityId } from "@shared/types/ids";
-import type { MapObstacle, PlayerPresenceState, UserMode, VillagerState } from "@shared/types/world";
-import { MAP_HEIGHT, MAP_WIDTH, UNIT_SELECTION_HIT_RADIUS, VILLAGER_RADIUS } from "@shared/constants/game";
+import type { BuildingKind, BuildingState, MapDefinition, MapObstacle, PlayerPresenceState, UserMode, VillagerState } from "@shared/types/world";
+import { BUILDING_GRID_SIZE, DEV_BUILD_SPEED_MULTIPLIER, MAP_HEIGHT, MAP_WIDTH, UNIT_SELECTION_HIT_RADIUS, VILLAGER_RADIUS } from "@shared/constants/game";
 import { RemotePlayerMarker } from "@/entities/RemotePlayer";
 import { DayNightTint } from "@/systems/DayNightTint";
 import { Pathfinder } from "@/systems/Pathfinder";
 import type { Vec2 } from "@shared/types/math";
+import { BUILDING_SPECS } from "@shared/buildings/buildingCatalog";
 
 type MinimapPayload = {
   map: { width: number; height: number; obstacles: MapObstacle[] };
   camera: { x: number; y: number; w: number; h: number };
   units: VillagerState[];
+  buildings: BuildingState[];
   players: PlayerPresenceState[];
+};
+
+type PlacementMode = {
+  kind: BuildingKind;
+  pos: Vec2;
+  valid: boolean;
 };
 
 export class WorldScene extends Phaser.Scene {
@@ -24,11 +33,16 @@ export class WorldScene extends Phaser.Scene {
   private displayName: string;
   private multiplayer: MultiplayerClient;
   private villagers: Villager[] = [];
+  private buildings: Building[] = [];
   private map = createTestMap();
   private cameraCtrl: RtsCameraController | null = null;
   private tint: DayNightTint | null = null;
   private pathfinder: Pathfinder | null = null;
   private selectionBox: Phaser.GameObjects.Graphics | null = null;
+  private buildingPreview: Phaser.GameObjects.Graphics | null = null;
+  private placementMode: PlacementMode | null = null;
+  private devFastBuild = false;
+  private buildingSaveTimerMs = 0;
   private dragStart: Vec2 | null = null;
   private isDraggingSelection = false;
   private latestPresence: PlayerPresenceState[] = [];
@@ -49,6 +63,8 @@ export class WorldScene extends Phaser.Scene {
     this.pathfinder = new Pathfinder(this.map);
     this.selectionBox = this.add.graphics();
     this.selectionBox.setDepth(100);
+    this.buildingPreview = this.add.graphics();
+    this.buildingPreview.setDepth(101);
 
     const cam = this.cameras.main;
     cam.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
@@ -59,11 +75,15 @@ export class WorldScene extends Phaser.Scene {
 
     if (this.mode === "player") {
       this.spawnPhaseTwoVillagers();
+      this.loadBuildings();
+      this.rebuildPathfinder();
     }
 
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.onPointerDown(pointer));
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => this.onPointerMove(pointer));
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => this.onPointerUp(pointer));
+    window.addEventListener("rts:building-placement", this.onBuildingPlacementCommand);
+    window.addEventListener("rts:dev-build-speed", this.onDevBuildSpeedCommand);
 
     this.unsubscribePresence = this.multiplayer.onPresence((players) => this.onPresence(players));
   }
@@ -72,6 +92,16 @@ export class WorldScene extends Phaser.Scene {
     const dtSec = Math.min(0.05, deltaMs / 1000);
     this.cameraCtrl?.update(dtSec);
     this.tint?.update();
+    this.updatePlacementPreview();
+
+    const buildSpeed = this.devFastBuild && import.meta.env.DEV ? DEV_BUILD_SPEED_MULTIPLIER : 1;
+    let buildingChanged = false;
+    for (const building of this.buildings) {
+      const before = building.getState();
+      building.update(dtSec, buildSpeed);
+      if (before !== building.getState()) buildingChanged = true;
+    }
+    if (buildingChanged) this.scheduleBuildingSave(deltaMs);
 
     if (this.villagers.length > 0 && this.pathfinder) {
       for (const villager of this.villagers) {
@@ -80,7 +110,7 @@ export class WorldScene extends Phaser.Scene {
       const units = this.villagers.map((v) => v.toState());
       const selectedUnitIds = this.getSelectedVillagers().map((v) => v.id);
       const lead = this.villagers[0].getPos();
-      this.multiplayer.setLocalPresence(lead, units, selectedUnitIds);
+      this.multiplayer.setLocalPresence(lead, units, selectedUnitIds, this.getBuildingStates());
     } else {
       this.multiplayer.setLocalPresence(null);
     }
@@ -94,8 +124,14 @@ export class WorldScene extends Phaser.Scene {
     this.remoteMarkers.clear();
     for (const villager of this.villagers) villager.destroy();
     this.villagers = [];
+    for (const building of this.buildings) building.destroy();
+    this.buildings = [];
     this.selectionBox?.destroy();
     this.selectionBox = null;
+    this.buildingPreview?.destroy();
+    this.buildingPreview = null;
+    window.removeEventListener("rts:building-placement", this.onBuildingPlacementCommand);
+    window.removeEventListener("rts:dev-build-speed", this.onDevBuildSpeedCommand);
   }
 
   private onPresence(players: PlayerPresenceState[]) {
@@ -161,6 +197,11 @@ export class WorldScene extends Phaser.Scene {
   private onPointerDown(pointer: Phaser.Input.Pointer) {
     if (this.mode !== "player") return;
     const worldPoint = this.pointerWorld(pointer);
+    if (this.placementMode) {
+      if (pointer.leftButtonDown()) this.placeBuilding();
+      if (pointer.rightButtonDown()) this.cancelBuildingPlacement();
+      return;
+    }
     if (pointer.leftButtonDown()) {
       this.dragStart = worldPoint;
       this.isDraggingSelection = false;
@@ -171,6 +212,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private onPointerMove(pointer: Phaser.Input.Pointer) {
+    if (this.placementMode) {
+      this.updatePlacementPreview(this.pointerWorld(pointer));
+      return;
+    }
     if (!this.dragStart || !pointer.leftButtonDown()) return;
     const worldPoint = this.pointerWorld(pointer);
     const dx = worldPoint.x - this.dragStart.x;
@@ -182,6 +227,7 @@ export class WorldScene extends Phaser.Scene {
 
   private onPointerUp(pointer: Phaser.Input.Pointer) {
     if (this.mode !== "player" || pointer.button !== 0 || !this.dragStart) return;
+    if (this.placementMode) return;
     const worldPoint = this.pointerWorld(pointer);
     if (this.isDraggingSelection) {
       this.selectInBox(this.dragStart, worldPoint, pointer.event.shiftKey);
@@ -280,9 +326,178 @@ export class WorldScene extends Phaser.Scene {
       map: { width: this.map.width, height: this.map.height, obstacles: this.map.obstacles },
       camera: { x: cam.scrollX, y: cam.scrollY, w: cam.width / cam.zoom, h: cam.height / cam.zoom },
       units: this.villagers.map((v) => v.toState()),
+      buildings: this.getBuildingStates(),
       players: this.latestPresence,
     };
     window.dispatchEvent(new CustomEvent<MinimapPayload>("rts:minimap", { detail: payload }));
+  }
+
+  private onBuildingPlacementCommand = (event: Event) => {
+    if (this.mode !== "player") return;
+    const detail = (event as CustomEvent<{ kind?: BuildingKind | "cancel" }>).detail;
+    if (!detail?.kind || detail.kind === "cancel") {
+      this.cancelBuildingPlacement();
+      return;
+    }
+    this.startBuildingPlacement(detail.kind);
+  };
+
+  private onDevBuildSpeedCommand = (event: Event) => {
+    if (!import.meta.env.DEV) return;
+    const detail = (event as CustomEvent<{ enabled?: boolean }>).detail;
+    this.devFastBuild = Boolean(detail?.enabled);
+  };
+
+  private startBuildingPlacement(kind: BuildingKind) {
+    const pointer = this.pointerWorld(this.input.activePointer);
+    const pos = this.snapBuildingPos(kind, pointer);
+    this.placementMode = {
+      kind,
+      pos,
+      valid: this.isValidBuildingPlacement(kind, pos),
+    };
+    this.clearSelectionBox();
+    this.drawBuildingPreview();
+    window.dispatchEvent(new CustomEvent("rts:building-placement-status", { detail: { kind } }));
+  }
+
+  private cancelBuildingPlacement() {
+    this.placementMode = null;
+    this.buildingPreview?.clear();
+    window.dispatchEvent(new CustomEvent("rts:building-placement-status", { detail: { kind: null } }));
+  }
+
+  private updatePlacementPreview(point = this.pointerWorld(this.input.activePointer)) {
+    if (!this.placementMode) return;
+    const pos = this.snapBuildingPos(this.placementMode.kind, point);
+    this.placementMode = {
+      ...this.placementMode,
+      pos,
+      valid: this.isValidBuildingPlacement(this.placementMode.kind, pos),
+    };
+    this.drawBuildingPreview();
+  }
+
+  private drawBuildingPreview() {
+    if (!this.placementMode || !this.buildingPreview) return;
+    const spec = BUILDING_SPECS[this.placementMode.kind];
+    const { pos, valid } = this.placementMode;
+    const color = valid ? 0x22c55e : 0xef4444;
+    this.buildingPreview.clear();
+    this.buildingPreview.fillStyle(color, 0.24);
+    this.buildingPreview.fillRect(pos.x, pos.y, spec.footprint.w, spec.footprint.h);
+    this.buildingPreview.lineStyle(2, color, 0.9);
+    this.buildingPreview.strokeRect(pos.x, pos.y, spec.footprint.w, spec.footprint.h);
+    this.buildingPreview.lineStyle(1, 0xf8fafc, 0.24);
+    for (let x = pos.x; x <= pos.x + spec.footprint.w; x += BUILDING_GRID_SIZE) {
+      this.buildingPreview.lineBetween(x, pos.y, x, pos.y + spec.footprint.h);
+    }
+    for (let y = pos.y; y <= pos.y + spec.footprint.h; y += BUILDING_GRID_SIZE) {
+      this.buildingPreview.lineBetween(pos.x, y, pos.x + spec.footprint.w, y);
+    }
+  }
+
+  private placeBuilding() {
+    if (!this.placementMode || !this.placementMode.valid) return;
+    const spec = BUILDING_SPECS[this.placementMode.kind];
+    const now = Date.now();
+    const state: BuildingState = {
+      id: ((`building-${crypto.randomUUID()}` as unknown) as EntityId),
+      kind: this.placementMode.kind,
+      ownerPlayerId: this.playerId,
+      pos: this.placementMode.pos,
+      w: spec.footprint.w,
+      h: spec.footprint.h,
+      hp: 1,
+      maxHp: spec.maxHp,
+      phase: "construction",
+      constructionDurationMs: spec.constructionDurationMs,
+      constructionElapsedMs: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.buildings.push(new Building(this, state));
+    this.rebuildPathfinder();
+    this.saveBuildings();
+    this.startBuildingPlacement(this.placementMode.kind);
+  }
+
+  private snapBuildingPos(kind: BuildingKind, point: Vec2): Vec2 {
+    const spec = BUILDING_SPECS[kind];
+    return {
+      x: Math.round((point.x - spec.footprint.w / 2) / BUILDING_GRID_SIZE) * BUILDING_GRID_SIZE,
+      y: Math.round((point.y - spec.footprint.h / 2) / BUILDING_GRID_SIZE) * BUILDING_GRID_SIZE,
+    };
+  }
+
+  private isValidBuildingPlacement(kind: BuildingKind, pos: Vec2) {
+    const spec = BUILDING_SPECS[kind];
+    const rect = new Phaser.Geom.Rectangle(pos.x, pos.y, spec.footprint.w, spec.footprint.h);
+    if (rect.x < 0 || rect.y < 0 || rect.right > this.map.width || rect.bottom > this.map.height) return false;
+    if (this.map.obstacles.some((o) => this.rectIntersectsObstacle(rect, o))) return false;
+    if (this.buildings.some((b) => Phaser.Geom.Intersects.RectangleToRectangle(rect, this.buildingRect(b.getState())))) return false;
+    if (this.villagers.some((v) => Phaser.Geom.Rectangle.Contains(rect, v.body.x, v.body.y))) return false;
+    return true;
+  }
+
+  private rectIntersectsObstacle(rect: Phaser.Geom.Rectangle, obstacle: MapObstacle) {
+    if (obstacle.shape === "rect" && obstacle.w && obstacle.h) {
+      return Phaser.Geom.Intersects.RectangleToRectangle(rect, new Phaser.Geom.Rectangle(obstacle.x, obstacle.y, obstacle.w, obstacle.h));
+    }
+    if (obstacle.shape === "circle" && obstacle.r) {
+      const closestX = Phaser.Math.Clamp(obstacle.x, rect.left, rect.right);
+      const closestY = Phaser.Math.Clamp(obstacle.y, rect.top, rect.bottom);
+      return Math.hypot(obstacle.x - closestX, obstacle.y - closestY) <= obstacle.r;
+    }
+    return false;
+  }
+
+  private rebuildPathfinder() {
+    this.pathfinder = new Pathfinder(this.createPathfindingMap());
+  }
+
+  private createPathfindingMap(): MapDefinition {
+    return {
+      ...this.map,
+      obstacles: [...this.map.obstacles, ...this.buildings.map((b) => b.getObstacle())],
+    };
+  }
+
+  private buildingRect(state: BuildingState) {
+    return new Phaser.Geom.Rectangle(state.pos.x, state.pos.y, state.w, state.h);
+  }
+
+  private getBuildingStates() {
+    return this.buildings.map((b) => b.getState());
+  }
+
+  private loadBuildings() {
+    const raw = window.localStorage.getItem(this.buildingStorageKey());
+    if (!raw) return;
+    try {
+      const states = JSON.parse(raw) as BuildingState[];
+      if (!Array.isArray(states)) return;
+      this.buildings = states
+        .filter((state) => state.kind === "townCenter" || state.kind === "house")
+        .map((state) => new Building(this, state));
+    } catch {
+      this.buildings = [];
+    }
+  }
+
+  private scheduleBuildingSave(deltaMs: number) {
+    this.buildingSaveTimerMs += deltaMs;
+    if (this.buildingSaveTimerMs < 1000) return;
+    this.buildingSaveTimerMs = 0;
+    this.saveBuildings();
+  }
+
+  private saveBuildings() {
+    window.localStorage.setItem(this.buildingStorageKey(), JSON.stringify(this.getBuildingStates()));
+  }
+
+  private buildingStorageKey() {
+    return `rts:${this.playerId as unknown as string}:phase3a:buildings`;
   }
 }
 
