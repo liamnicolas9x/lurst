@@ -1,7 +1,7 @@
 ## Project Status
 
 ### Current Phase
-- Phase 1: Foundation World
+- Phase 2: RTS Core
 
 ### Completed (Phase 1 Foundation)
 - Repo layout: `client/`, `server/`, `shared/`, `assets/`, `docs/`
@@ -32,10 +32,35 @@
   - `api/chat/send.ts` (not implemented; placeholder)
   - `vercel.json` (static build for `client/` + API functions + SPA rewrite)
 
+### Completed (Phase 2 RTS Core)
+- RTS unit control:
+  - Drag rectangle multi-selection
+  - Improved left-click selection with shift-add/toggle behavior
+  - Right-click movement for selected groups
+  - RTS-style selection rings, selected labels, and lightweight move path feedback
+- Movement and pathfinding:
+  - Lightweight readable grid A* pathfinding
+  - Trees and river terrain block movement
+  - Hard obstacle collision with slide fallback
+  - Soft unit collision and separation to reduce unnatural stacking
+  - Formation-style destination offsets for grouped move orders
+  - Movement and camera responsiveness tuning
+- Minimap foundation:
+  - Realtime local unit dots
+  - Remote unit dots when presence includes units
+  - Camera viewport rectangle
+  - River and tree obstacle hints
+- State architecture foundation:
+  - Shared unit task state with `idle` and `move`
+  - Shared move command includes selected unit ids
+  - Multiplayer presence can carry lightweight unit snapshots and selected unit ids
+  - Shared handmade map definition used by both client and Vercel bootstrap API
+
 ### Architecture Notes
-- Client game loop stays local for Phase 1; networking is intentionally lightweight.
-- Realtime sync uses Supabase presence to share approximate player positions.
-- No authoritative movement, no persistence, no simulation systems beyond a single controllable placeholder.
+- Client game loop stays local for Phase 2; networking remains intentionally lightweight until authoritative movement is implemented.
+- Realtime sync uses Supabase presence to share approximate player positions and lightweight unit snapshots.
+- No buildings, resources, combat, wildlife, hunger, production, or persistence simulation have been implemented.
+- Pathfinding is intentionally small and readable: grid-based routing plus local collision/separation, not advanced swarm simulation.
 
 ### How To Run (Local)
 - Install: `npm install`
@@ -54,12 +79,12 @@ Server (Vercel functions, optional for later phases):
 
 ### Pending Next Steps (Phase 2+)
 - Authoritative movement pipeline (inputs -> server tick -> snapshots)
-- Proper obstacle-aware movement/pathfinding (Phase 2 scope)
 - Database schema + persistence + RLS policies
 - Real global chat persistence + moderation
-- Improved minimap (real-time view + pings)
+- Future Phase 3 village systems: Town Center, House, resources, gathering, and construction
 
 ### Known Issues / Tradeoffs
 - Client build bundle is large due to Phaser; acceptable for now.
-- Tree collision is intentionally simple (unit stops instead of navigating).
+- Pathfinding is lightweight and not yet server-authoritative.
+- Local Phase 2 sandbox spawns a small controllable villager group for multi-selection testing.
 - Supabase multiplayer requires a configured project + Realtime enabled.

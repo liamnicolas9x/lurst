@@ -11,6 +11,7 @@ export function LoginPanel(props: {
   const [displayName, setDisplayName] = useState("Player");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const supabaseAvailable = hasSupabaseEnv();
   const spectatorId = useMemo(() => `spectator-${crypto.randomUUID()}`, []);
@@ -18,6 +19,7 @@ export function LoginPanel(props: {
   async function signIn() {
     setBusy(true);
     setError(null);
+    setInfo(null);
     try {
       const supabase = getSupabaseClient();
       if (!supabase) throw new Error("Supabase env missing");
@@ -27,7 +29,43 @@ export function LoginPanel(props: {
       if (!userId) throw new Error("No user id returned");
       props.onEnter({ mode, displayName, playerId: userId });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign in failed");
+      const message = e instanceof Error ? e.message : "Sign in failed";
+      const code = typeof e === "object" && e ? (e as { code?: unknown }).code : undefined;
+      const isUnconfirmed =
+        code === "email_not_confirmed" ||
+        (typeof message === "string" && message.toLowerCase().includes("email not confirmed"));
+
+      if (isUnconfirmed) {
+        setInfo(
+          "Email chưa được xác nhận. Hãy mở inbox/spam để bấm link xác nhận, rồi quay lại Sign in. Nếu chưa thấy email, bấm Resend confirmation."
+        );
+        setError(null);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendConfirmation() {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const supabase = getSupabaseClient();
+      if (!supabase) throw new Error("Supabase env missing");
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (error) throw error;
+      setInfo("Đã gửi lại email xác nhận. Hãy kiểm tra inbox/spam.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setBusy(false);
     }
@@ -36,13 +74,30 @@ export function LoginPanel(props: {
   async function signUp() {
     setBusy(true);
     setError(null);
+    setInfo(null);
     try {
       const supabase = getSupabaseClient();
       if (!supabase) throw new Error("Supabase env missing");
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: window.location.origin,
+          data: {
+            display_name: displayName,
+          },
+        },
+      });
       if (error) throw error;
-      const userId = data.user?.id;
-      if (!userId) throw new Error("Sign up succeeded but no user id");
+      const userId = data.session?.user?.id ?? data.user?.id;
+      if (!userId) {
+        setInfo("Sign up created. If email confirmation is enabled, check your inbox and then sign in.");
+        return;
+      }
+      if (!data.session) {
+        setInfo("Account created. If email confirmation is enabled, confirm your email then sign in.");
+        return;
+      }
       props.onEnter({ mode, displayName, playerId: userId });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sign up failed");
@@ -131,11 +186,20 @@ export function LoginPanel(props: {
                   Sign up
                 </button>
               </div>
+              <button
+                type="button"
+                className="rounded-md border border-zinc-800 bg-zinc-950/30 px-3 py-2 text-sm disabled:opacity-60"
+                onClick={resendConfirmation}
+                disabled={!supabaseAvailable || busy || !email}
+              >
+                Resend confirmation
+              </button>
               {!supabaseAvailable ? (
                 <div className="text-xs text-amber-300/90">
                   Supabase env not set. Multiplayer + auth will run in offline scaffold mode.
                 </div>
               ) : null}
+              {info ? <div className="text-xs text-emerald-200/90">{info}</div> : null}
               {error ? <div className="text-xs text-rose-300">{error}</div> : null}
             </div>
 

@@ -5,7 +5,7 @@ export type UserMode = "player" | "spectator";
 
 export type MapObstacle = {
   id: EntityId;
-  kind: "tree" | "river";
+  kind: "tree" | "river" | "blocked";
   shape: "circle" | "rect";
   x: number;
   y: number;
@@ -24,13 +24,26 @@ export type VillagerState = {
   id: EntityId;
   ownerPlayerId: PlayerId;
   pos: Vec2;
+  task: UnitTaskState;
+  selected?: boolean;
 };
+
+export type UnitTaskState =
+  | { kind: "idle" }
+  | {
+      kind: "move";
+      target: Vec2;
+      path: Vec2[];
+      pathIndex: number;
+    };
 
 export type PlayerPresenceState = {
   playerId: PlayerId;
   displayName: string;
   mode: UserMode;
   pos?: Vec2;
+  units?: VillagerState[];
+  selectedUnitIds?: EntityId[];
   updatedAt: number;
 };
 

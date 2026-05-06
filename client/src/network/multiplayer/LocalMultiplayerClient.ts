@@ -1,7 +1,7 @@
 import type { MultiplayerClient, MultiplayerStatus } from "@/network/multiplayer/MultiplayerClient";
 import type { ChatMessage, ClientInput } from "@shared/types/net";
-import type { PlayerPresenceState } from "@shared/types/world";
-import type { PlayerId } from "@shared/types/ids";
+import type { PlayerPresenceState, VillagerState } from "@shared/types/world";
+import type { EntityId, PlayerId } from "@shared/types/ids";
 
 type Listener<T> = (value: T) => void;
 
@@ -35,13 +35,15 @@ export class LocalMultiplayerClient implements MultiplayerClient {
     this.emitPresence();
   }
 
-  setLocalPresence(p: { x: number; y: number } | null) {
+  setLocalPresence(p: { x: number; y: number } | null, units: VillagerState[] = [], selectedUnitIds: EntityId[] = []) {
     const now = Date.now();
     this.players = this.players.map((pl) =>
       pl.playerId === this.local.playerId
         ? {
             ...pl,
             pos: p ?? undefined,
+            units,
+            selectedUnitIds,
             updatedAt: now,
           }
         : pl,
@@ -49,7 +51,9 @@ export class LocalMultiplayerClient implements MultiplayerClient {
     this.emitPresence();
   }
 
-  sendInput(_input: ClientInput) {}
+  sendInput(input: ClientInput) {
+    void input;
+  }
 
   sendChat(text: string) {
     const msg: ChatMessage = {

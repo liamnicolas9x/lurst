@@ -1,8 +1,9 @@
-import type { PlayerId } from "./ids";
+import type { EntityId, PlayerId } from "./ids";
 import type { Vec2 } from "./math";
 
 export type MoveCommand = {
   kind: "move";
+  unitIds: EntityId[];
   target: Vec2;
 };
 
