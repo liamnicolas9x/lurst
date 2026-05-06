@@ -1,0 +1,23 @@
+{
+  "name": "my-rts-game",
+  "private": true,
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm --workspace client run dev",
+    "build": "npm --workspace client run build",
+    "check": "npm --workspace client run check && npm run check:server",
+    "check:server": "tsc -p server/tsconfig.json --noEmit",
+    "lint": "npm --workspace client run lint"
+  },
+  "devDependencies": {
+    "@vercel/node": "^3.2.29",
+    "@types/node": "^22.15.30",
+    "typescript": "~5.8.3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1"
+  }
+}
+
