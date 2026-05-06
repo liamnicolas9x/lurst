@@ -4,9 +4,6 @@
   "installCommand": "npm install --include=dev",
   "buildCommand": "npm run build",
   "outputDirectory": "client/dist",
-  "functions": {
-    "api/**/*.ts": {}
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
